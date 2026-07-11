@@ -1,0 +1,31 @@
+# Continuous proof: run the published EvoOM Guard on all four scenarios and
+# assert the verdict of each (via the JSON, not the exit code — three of the
+# four intentionally exit non-zero). Green means the demo's claims still hold.
+name: Demo proof suite
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Get the published EvoOM Guard (v3.2.1)
+        run: curl -sSL -o evo-guard.pyz https://github.com/EvoRiseKsa/EvoOM-Guard-m/releases/download/v3.2.1/evo-guard.pyz
+      - name: Prove the four scenarios
+        run: |
+          set -u
+          check() {  # $1=patch  $2=expected verdict  $3=extra args
+            python evo-guard.pyz guard ./repo --patch "$1" $3 --json out.json >/dev/null 2>&1 || true
+            got=$(python -c "import json,sys;print(json.load(open('out.json'))['verdict'])")
+            if [ "$got" != "$2" ]; then echo "::error::$1 expected $2 but got $got"; exit 1; fi
+            echo "OK  $1  ->  $got"
+          }
+          check patches/1-honest-fix.txt      PASS     ""
+          check patches/2-edit-tests.txt      REJECTED ""
+          check patches/3-fake-stdout.txt     FAIL     ""
+          check patches/4-blackbox-forgery.txt FAIL    "--verifier-pack ./pack --blackbox"
+          echo "All four scenarios verified against the published release."
