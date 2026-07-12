@@ -8,8 +8,8 @@
 > **Honest scope:** this repo is separate from the tool's codebase but lives under
 > the **same account** — it is a reproducible external-repository demonstration,
 > **not** third-party validation. Every claim below is re-proven on every push by
-> the [Demo proof suite](../../actions/workflows/proof.yml) (green = the four
-> verdicts still hold against the published release).
+> the [Demo proof suite](../../actions/workflows/proof.yml) (green = every
+> verdict below still holds against the published release).
 
 ## The four scenarios
 
@@ -93,7 +93,10 @@ command, setup, and policy identity live in the repo, untouchable by any patch.
 ## Layout
 
 ```
-repo/       the project under test (a temperature converter + its own tests)
-pack/       the judge-owned black-box protocol pack (lives OUTSIDE repo/)
-patches/    the four scenario patches above
+repo/            the project under test (a temperature converter + its own tests)
+pack/            the judge-owned black-box protocol pack (lives OUTSIDE repo/)
+patches/         the four scenario patches above
+node-workspace/  the npm-workspaces monorepo fixture (no committed node_modules —
+                 the policy's setup_command installs from the lockfile at judge time)
+patches-node/    the four Node-workspace scenario patches
 ```
