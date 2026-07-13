@@ -8,7 +8,7 @@
   ],
   "setup_command": [
     "npm",
-    "install",
+    "ci",
     "--ignore-scripts",
     "--no-audit",
     "--no-fund",

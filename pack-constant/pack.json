@@ -1,0 +1,6 @@
+{
+  "id": "constant-non-invoking-control",
+  "version": "1.0.0",
+  "description": "Negative control: passes without invoking the candidate launcher",
+  "target_type": "control"
+}

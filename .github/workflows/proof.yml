@@ -5,56 +5,113 @@ name: Demo proof suite
 on:
   push:
   workflow_dispatch:
+permissions:
+  contents: read
+env:
+  EVOGUARD_VERSION: v3.4.4
+  # Independent, immutable pin for the published release asset. Downloading
+  # SHA256SUMS is useful provenance, but it must not be the only trust root.
+  EVOGUARD_RELEASE_SHA256: fa8ce2d59bcd3a143cdc88b8944c47d1276962505d0893b116d94eebf4c976cb
 jobs:
   proof:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
       - name: Install the demo project's test runner
-        run: pip install -q pytest
-      - name: Get the published EvoOM Guard (v3.4.0) and VERIFY its checksum
-        # The release ships SHA256SUMS next to the artifact — the proof chain
-        # verifies it, so a green run also proves release provenance, not just
-        # verdict behaviour.
+        run: pip install -q pytest==9.1.1
+      - name: Get the published EvoOM Guard v3.4.4 and verify both checksum pins
+        # The release ships SHA256SUMS beside the artifact. The independent
+        # digest below binds this demo to known bytes; it does not by itself
+        # prove the truth of the execution evidence produced from those bytes.
         run: |
-          curl -sSL -o evo-guard.pyz  https://github.com/EvoRiseKsa/EvoOM-Guard-m/releases/download/v3.4.0/evo-guard.pyz
-          curl -sSL -o SHA256SUMS     https://github.com/EvoRiseKsa/EvoOM-Guard-m/releases/download/v3.4.0/SHA256SUMS
+          set -euo pipefail
+          curl -sSL -o evo-guard.pyz  "https://github.com/EvoRiseKsa/EvoOM-Guard-m/releases/download/${EVOGUARD_VERSION}/evo-guard.pyz"
+          curl -sSL -o SHA256SUMS     "https://github.com/EvoRiseKsa/EvoOM-Guard-m/releases/download/${EVOGUARD_VERSION}/SHA256SUMS"
           sha256sum -c SHA256SUMS
+          printf '%s  %s\n' "$EVOGUARD_RELEASE_SHA256" evo-guard.pyz | sha256sum -c -
       - name: Prove the four scenarios
         run: |
-          set -u
-          check() {  # $1=patch  $2=expected verdict  $3=extra args
-            python evo-guard.pyz guard ./repo --patch "$1" $3 --json out.json >/dev/null 2>&1 || true
+          set -euo pipefail
+          check() {  # $1=patch  $2=expected verdict  remaining argv=extra args
+            patch="$1"
+            expected="$2"
+            shift 2
+            rm -f out.json
+            if python evo-guard.pyz guard ./repo --patch "$patch" "$@" --json out.json >/dev/null 2>&1; then
+              rc=0
+            else
+              rc=$?
+            fi
+            if [ ! -s out.json ]; then echo "::error::$patch produced no JSON verdict"; exit 1; fi
             got=$(python -c "import json,sys;print(json.load(open('out.json'))['verdict'])")
-            if [ "$got" != "$2" ]; then echo "::error::$1 expected $2 but got $got"; exit 1; fi
-            echo "OK  $1  ->  $got"
+            if [ "$got" != "$expected" ]; then echo "::error::$patch expected $expected but got $got"; exit 1; fi
+            expected_rc=1
+            if [ "$expected" = "PASS" ]; then expected_rc=0; fi
+            if [ "$rc" -ne "$expected_rc" ]; then
+              echo "::error::$patch expected exit $expected_rc but got $rc"; exit 1
+            fi
+            echo "OK  $patch  ->  $got"
           }
-          check patches/1-honest-fix.txt      PASS     ""
-          check patches/2-edit-tests.txt      REJECTED ""
-          check patches/3-fake-stdout.txt     FAIL     ""
-          check patches/4-blackbox-forgery.txt FAIL    "--verifier-pack ./pack --blackbox"
+          check patches/1-honest-fix.txt       PASS
+          check patches/2-edit-tests.txt       REJECTED
+          check patches/3-fake-stdout.txt      FAIL
+          check patches/4-blackbox-forgery.txt FAIL --verifier-pack ./pack --blackbox
           echo "All four scenarios verified against the published release."
 
       - name: Prove the v3.3 policy-consistency claims
         run: |
-          set -u
+          set -euo pipefail
           # 5) A gate on a GREEN base is honestly refused: the honest fix passes
           #    the suite, but the fix is NOT demonstrated (this demo's base is
           #    green) -> FAIL fix_not_demonstrated.
-          python evo-guard.pyz guard ./repo --patch patches/1-honest-fix.txt             --require-demonstrated-fix --json out5.json >/dev/null 2>&1 || true
-          test "$(python -c "import json;print(json.load(open('out5.json'))['reason_code'])")" = "fix_not_demonstrated"
+          rm -f out5.json
+          if python evo-guard.pyz guard ./repo --patch patches/1-honest-fix.txt \
+            --require-demonstrated-fix --json out5.json >/dev/null 2>&1; then
+            rc=0
+          else
+            rc=$?
+          fi
+          test "$rc" -eq 1
+          test -s out5.json
+          python - <<'PY'
+          import json
+          result = json.load(open("out5.json", encoding="utf-8"))
+          assert result["verdict"] == "FAIL"
+          assert result["reason_code"] == "fix_not_demonstrated"
+          PY
           echo "OK  green base + require-demonstrated-fix -> FAIL fix_not_demonstrated"
           # 6) An unenforceable gate combination is refused, never dropped.
-          python evo-guard.pyz guard ./repo --patch patches/1-honest-fix.txt             --require-demonstrated-fix --blackbox --json out6.json >/dev/null 2>&1 || true
-          test "$(python -c "import json;print(json.load(open('out6.json'))['reason_code'])")" = "policy_requirement_unsupported"
+          rm -f out6.json
+          if python evo-guard.pyz guard ./repo --patch patches/1-honest-fix.txt \
+            --require-demonstrated-fix --blackbox --json out6.json >/dev/null 2>&1; then
+            rc=0
+          else
+            rc=$?
+          fi
+          test "$rc" -eq 1
+          test -s out6.json
+          python - <<'PY'
+          import json
+          result = json.load(open("out6.json", encoding="utf-8"))
+          assert result["verdict"] == "ERROR"
+          assert result["reason_code"] == "policy_requirement_unsupported"
+          PY
           echo "OK  gate + blackbox -> ERROR policy_requirement_unsupported"
           # 7) A broken protected policy file stops the run (exit 2, fail-closed).
           echo '{"require_report_isolation": "external"}' > bad-config.json
-          if python evo-guard.pyz guard ./repo --patch patches/1-honest-fix.txt                --config bad-config.json >/dev/null 2>&1; then
-            echo "::error::broken config did not stop the run"; exit 1
+          if python evo-guard.pyz guard ./repo --patch patches/1-honest-fix.txt \
+            --config bad-config.json >/dev/null 2>&1; then
+            rc=0
+          else
+            rc=$?
+          fi
+          if [ "$rc" -ne 2 ]; then
+            echo "::error::broken config expected exit 2 but got $rc"; exit 1
           fi
           echo "OK  broken .evoguard.json -> fail-closed"
           # 8) The judge-owned pack validates as a versioned behaviour contract.
@@ -69,6 +126,7 @@ jobs:
           test "$OBSERVED" = "$PACK_SHA"
 
           # The pinned, judge-owned pack passes independently after the repo suite.
+          rm -f out-v34-pass.json
           python evo-guard.pyz guard ./repo --patch patches/1-honest-fix.txt \
             --verifier-pack ./pack-native \
             --expect-verifier-pack-sha256 "$PACK_SHA" \
@@ -89,10 +147,17 @@ jobs:
 
           # The repo suite is green (2 tests), but the separate pack rejects the
           # forged CLI. The composed verdict must therefore be FAIL (2/3).
-          python evo-guard.pyz guard ./repo --patch patches/4-blackbox-forgery.txt \
+          rm -f out-v34-pack-fail.json
+          if python evo-guard.pyz guard ./repo --patch patches/4-blackbox-forgery.txt \
             --verifier-pack ./pack-native \
             --expect-verifier-pack-sha256 "$PACK_SHA" \
-            --json out-v34-pack-fail.json >/dev/null 2>&1 || true
+            --json out-v34-pack-fail.json >/dev/null 2>&1; then
+            rc=0
+          else
+            rc=$?
+          fi
+          test "$rc" -eq 1
+          test -s out-v34-pack-fail.json
           python - <<'PY'
           import json
           result = json.load(open("out-v34-pack-fail.json", encoding="utf-8"))
@@ -106,12 +171,20 @@ jobs:
           # One changed byte under the same expected pin is refused before any
           # candidate test command runs.
           TAMPERED="$RUNNER_TEMP/evoguard-pack-tampered"
+          rm -rf "$TAMPERED"
           cp -R pack-native "$TAMPERED"
           printf '\n# changed after policy review\n' >> "$TAMPERED/test_policy.py"
-          python evo-guard.pyz guard ./repo --patch patches/1-honest-fix.txt \
+          rm -f out-v34-tamper.json
+          if python evo-guard.pyz guard ./repo --patch patches/1-honest-fix.txt \
             --verifier-pack "$TAMPERED" \
             --expect-verifier-pack-sha256 "$PACK_SHA" \
-            --json out-v34-tamper.json >/dev/null 2>&1 || true
+            --json out-v34-tamper.json >/dev/null 2>&1; then
+            rc=0
+          else
+            rc=$?
+          fi
+          test "$rc" -eq 1
+          test -s out-v34-tamper.json
           python - <<'PY'
           import json
           result = json.load(open("out-v34-tamper.json", encoding="utf-8"))
@@ -121,14 +194,116 @@ jobs:
           PY
           echo "All v3.4 pack identity and mandatory-phase claims verified."
 
+      - name: Prove v3.4.4 lifecycle and assurance boundaries
+        run: |
+          set -euo pipefail
+
+          # A green black-box pack is not gradeable unless it invokes the
+          # candidate through the judge-owned launcher.
+          rm -f out-v344-not-exercised.json
+          if python evo-guard.pyz guard ./repo --patch patches/1-honest-fix.txt \
+            --verifier-pack ./pack-constant --blackbox --blackbox-only \
+            --json out-v344-not-exercised.json >/dev/null 2>&1; then
+            rc=0
+          else
+            rc=$?
+          fi
+          test "$rc" -eq 1
+          test -s out-v344-not-exercised.json
+          python - <<'PY'
+          import json
+          result = json.load(open("out-v344-not-exercised.json", encoding="utf-8"))
+          att = result["attestation"]
+          assert result["verdict"] == "ERROR"
+          assert result["reason_code"] == "candidate_not_exercised"
+          assert result["execution_state"] == "completed"
+          assert result["verdict_source"] is None
+          assert result["isolation"] == "not_run"
+          assert att["candidate_invocations"] == 0
+          assert att["candidate_launcher_invocation_observed"] is False
+          assert att["isolation_evidence"]["delivered"] == "not_run"
+          assert att["isolation_evidence"]["prepared"] == "subprocess"
+          PY
+
+          # The judge process starts, exceeds its deadline, and is recorded as
+          # incomplete rather than being mistaken for a preflight refusal.
+          rm -f out-v344-timeout.json
+          if python evo-guard.pyz guard ./repo --patch patches/1-honest-fix.txt \
+            --verifier-pack ./pack-timeout --blackbox --blackbox-only --timeout 2 \
+            --json out-v344-timeout.json >/dev/null 2>&1; then
+            rc=0
+          else
+            rc=$?
+          fi
+          test "$rc" -eq 1
+          test -s out-v344-timeout.json
+          python - <<'PY'
+          import json
+          result = json.load(open("out-v344-timeout.json", encoding="utf-8"))
+          att = result["attestation"]
+          assert result["verdict"] == "ERROR"
+          assert result["reason_code"] == "test_timeout"
+          assert result["execution_state"] == "started_incomplete"
+          assert result["execution_phase"] == "blackbox_pack"
+          assert result["test_command_ran"] is True
+          assert result["verdict_source"] is None
+          assert att["verifier_pack_started"] is True
+          assert att["verifier_pack_completed"] is False
+          PY
+
+          # Black-box-only has no weaker repo-native report channel, so the
+          # delivered end-to-end report-integrity level is external-process.
+          rm -f out-v344-blackbox-only.json
+          python evo-guard.pyz guard ./repo --patch patches/1-honest-fix.txt \
+            --verifier-pack ./pack --blackbox --blackbox-only \
+            --require-report-integrity external_process_isolated \
+            --json out-v344-blackbox-only.json >/dev/null
+          python - <<'PY'
+          import json
+          result = json.load(open("out-v344-blackbox-only.json", encoding="utf-8"))
+          assurance = result["assurance"]
+          att = result["attestation"]
+          assert result["verdict"] == "PASS"
+          assert result["verdict_source"] == "blackbox"
+          assert result["execution_state"] == "completed"
+          assert assurance["report_integrity"] == "external_process_isolated"
+          assert assurance["overall_profile"] == "black_box_external_judge"
+          assert att["repo_suite_state"] == "not_required_blackbox_only"
+          assert att["candidate_launcher_invocation_observed"] is True
+          assert att["candidate_invocations"] >= 1
+          PY
+
+          # Default black-box mode composes the external pack with the repo's
+          # same-process suite. The end-to-end claim must therefore report the
+          # weaker channel, never inherit the stronger phase in isolation.
+          rm -f out-v344-composite.json
+          python evo-guard.pyz guard ./repo --patch patches/1-honest-fix.txt \
+            --verifier-pack ./pack --blackbox \
+            --json out-v344-composite.json >/dev/null
+          python - <<'PY'
+          import json
+          result = json.load(open("out-v344-composite.json", encoding="utf-8"))
+          assurance = result["assurance"]
+          att = result["attestation"]
+          assert result["verdict"] == "PASS"
+          assert result["verdict_source"] == "composite:blackbox+repo"
+          assert (result["tests_passed"], result["tests_total"]) == (3, 3)
+          assert assurance["report_integrity"] == "same_process_candidate_writable"
+          assert assurance["overall_profile"] == "composite_blackbox_repo_native"
+          assert att["repo_suite_state"] == "composed_completed"
+          assert att["repo_suite_passed"] is True
+          PY
+          echo "All v3.4.4 lifecycle and assurance-boundary claims verified."
+
       - name: Prove setup, suite, and pack use one exact Docker image ID
         run: |
           set -euo pipefail
           PACK_SHA="$(tr -d '[:space:]' < pack-native.v2.sha256)"
-          IMAGE="evoguard-demo-judge:3.4.0"
+          IMAGE="evoguard-demo-judge:3.4.4"
           docker build --file .github/docker/Dockerfile.judge --tag "$IMAGE" .
           docker image inspect "$IMAGE" --format '{{.Id}}' > expected-image-id.txt
 
+          rm -f out-v34-docker.json
           python evo-guard.pyz guard ./repo --patch patches/1-honest-fix.txt \
             --verifier-pack ./pack-native \
             --expect-verifier-pack-sha256 "$PACK_SHA" \
@@ -149,6 +324,38 @@ jobs:
           PY
           echo "Exact resolved Docker image identity verified: $(cat expected-image-id.txt)"
 
+          # In black-box Docker mode, an isolation claim needs both a launcher
+          # receipt and a genuine runtime-written container ID. The JSON exposes
+          # bounded counts (not the sensitive/raw IDs), so assert both channels.
+          rm -f out-v344-docker-blackbox.json
+          python evo-guard.pyz guard ./repo --patch patches/1-honest-fix.txt \
+            --verifier-pack ./pack --blackbox --blackbox-only \
+            --isolation docker --docker-image "$IMAGE" \
+            --require-candidate-isolation docker \
+            --require-report-integrity external_process_isolated \
+            --json out-v344-docker-blackbox.json >/dev/null
+          python - <<'PY'
+          import json
+          result = json.load(open("out-v344-docker-blackbox.json", encoding="utf-8"))
+          expected = open("expected-image-id.txt", encoding="ascii").read().strip()
+          att = result["attestation"]
+          evidence = att["isolation_evidence"]
+          assert result["verdict"] == "PASS"
+          assert result["verdict_source"] == "blackbox"
+          assert result["isolation"] == "docker"
+          assert result["assurance"]["candidate_isolation"] == "docker"
+          assert result["assurance"]["report_integrity"] == "external_process_isolated"
+          assert evidence["requested"] == "docker"
+          assert evidence["delivered"] == "docker"
+          assert evidence["image_digest"] == expected
+          assert evidence["candidate_launcher_events"] >= 1
+          assert evidence["candidate_container_ids_observed"] >= 1
+          assert evidence["candidate_invocations"] >= 1
+          assert att["candidate_launcher_invocation_observed"] is True
+          assert att["candidate_invocations"] >= 1
+          PY
+          echo "Docker launcher receipt + runtime CID evidence verified."
+
   node-proof:
     # The realistic-fixture proof: a Node WORKSPACES monorepo judged by the
     # published release through the structured vitest oracle (junit+exit).
@@ -158,24 +365,40 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
       - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
         with:
           node-version: "22"
-      - name: Get + VERIFY the published EvoOM Guard
+      - name: Get + VERIFY the published EvoOM Guard v3.4.4
         run: |
-          curl -sSL -o evo-guard.pyz https://github.com/EvoRiseKsa/EvoOM-Guard-m/releases/download/v3.4.0/evo-guard.pyz
-          curl -sSL -o SHA256SUMS    https://github.com/EvoRiseKsa/EvoOM-Guard-m/releases/download/v3.4.0/SHA256SUMS
+          set -euo pipefail
+          curl -sSL -o evo-guard.pyz "https://github.com/EvoRiseKsa/EvoOM-Guard-m/releases/download/${EVOGUARD_VERSION}/evo-guard.pyz"
+          curl -sSL -o SHA256SUMS    "https://github.com/EvoRiseKsa/EvoOM-Guard-m/releases/download/${EVOGUARD_VERSION}/SHA256SUMS"
           sha256sum -c SHA256SUMS
+          printf '%s  %s\n' "$EVOGUARD_RELEASE_SHA256" evo-guard.pyz | sha256sum -c -
       - name: Prove the four Node-workspace scenarios
         run: |
-          set -u
+          set -euo pipefail
           check() {  # $1=patch  $2=expected verdict
-            python evo-guard.pyz guard ./node-workspace --patch "$1"               --config node-workspace/.evoguard.json --json out.json >/dev/null 2>&1 || true
+            rm -f out.json
+            if python evo-guard.pyz guard ./node-workspace --patch "$1" \
+              --config node-workspace/.evoguard.json --json out.json >/dev/null 2>&1; then
+              rc=0
+            else
+              rc=$?
+            fi
+            if [ ! -s out.json ]; then echo "::error::$1 produced no JSON verdict"; exit 1; fi
             got=$(python -c "import json;print(json.load(open('out.json'))['verdict'])")
             if [ "$got" != "$2" ]; then echo "::error::$1 expected $2 but got $got"; exit 1; fi
+            expected_rc=1
+            if [ "$2" = "PASS" ]; then expected_rc=0; fi
+            if [ "$rc" -ne "$expected_rc" ]; then
+              echo "::error::$1 expected exit $expected_rc but got $rc"; exit 1
+            fi
             echo "OK  $1  ->  $got"
           }
           check patches-node/1-honest-fix.txt          PASS
@@ -184,6 +407,11 @@ jobs:
           check patches-node/4-pkgjson-test-tamper.txt FAIL
           # Scenario 4 depth: the verdict must come from the STRUCTURED vitest
           # oracle (the restored script really ran), not from the forged echo.
-          python evo-guard.pyz guard ./node-workspace --patch patches-node/4-pkgjson-test-tamper.txt             --config node-workspace/.evoguard.json --json out4.json >/dev/null 2>&1 || true
-          test "$(python -c "import json;print(json.load(open('out4.json'))['verdict_source'])")" = "junit+exit"
+          python - <<'PY'
+          import json
+          result = json.load(open("out.json", encoding="utf-8"))
+          assert result["verdict"] == "FAIL"
+          assert result["verdict_source"] == "junit+exit"
+          assert (result["tests_passed"], result["tests_total"]) == (2, 3)
+          PY
           echo "All Node-workspace scenarios verified against the published release."
