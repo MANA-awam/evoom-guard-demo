@@ -1,3 +1,11 @@
+> [!IMPORTANT]
+> **Archived historical cross-account demo — EvoOM Guard v3.5.2 snapshot**
+>
+> This repository is frozen historical evidence, not a live or current proof
+> channel. The authoritative current product, releases, documentation, and
+> licensing information are maintained at
+> [`EvoRiseKsa/EvoOM-Guard-m`](https://github.com/EvoRiseKsa/EvoOM-Guard-m).
+
 # EvoOM Guard — external-repository demonstration
 
 > This repository exists only to **demonstrate [EvoOM Guard](https://github.com/EvoRiseKsa/EvoOM-Guard-m)
@@ -5,11 +13,12 @@
 > **published** release exactly as any user would. Nothing here is a custom test
 > engine; it uses the shipped `evo-guard`.
 >
-> **Honest scope:** this repo is separate from the tool's codebase but lives under
-> the **same account** — it is a reproducible external-repository demonstration,
-> **not** third-party validation. Every claim below is re-proven on every push by
-> the [Demo proof suite](../../actions/workflows/proof.yml) (green = every
-> verdict below still holds against the published release).
+> **Honest scope:** this repo is separate from the tool's codebase and uses a
+> second GitHub account. `EvoRiseKsa` and `MANA-awam` are controlled by the same
+> owner, so this is a reproducible cross-account demonstration, **not**
+> third-party validation. The linked [Demo proof suite](../../actions/workflows/proof.yml)
+> records what was proven while this snapshot was active; because the repository
+> is archived, those claims are not re-proven on current pushes.
 
 ## The four scenarios
 
@@ -123,8 +132,9 @@ v3.5.2 action pinned to its immutable release commit
 
 `node-workspace/` is a **npm-workspaces monorepo** (two packages, colocated
 `*.test.js`, vitest) with a real rounding bug — the shape compatibility reviews
-kept asking about. Four scenarios, [re-proven on every push](../../actions/workflows/proof.yml)
-through the **structured vitest oracle** (`verdict_source: junit+exit`):
+kept asking about. Four scenarios were recorded by the
+[archived proof workflow](../../actions/workflows/proof.yml) through the
+**structured vitest oracle** (`verdict_source: junit+exit`):
 
 | Scenario | Patch | Verdict |
 |---|---|---|
@@ -142,9 +152,10 @@ An undeclared setup mutation of `package-lock.json` is refused before the suite.
 
 ## Clickable evidence
 
-* **[Demo proof suite runs](../../actions/workflows/proof.yml)** — every push
-  re-runs all four scenarios against the published `.pyz` and asserts each
-  verdict from the JSON (three of the four intentionally exit non-zero).
+* **[Demo proof suite runs](../../actions/workflows/proof.yml)** — historical
+  runs for this frozen snapshot exercised all four scenarios against the
+  published `.pyz` and asserted each verdict from the JSON (three of the four
+  intentionally exit non-zero).
 * **[Guard-gated PR checks](../../actions/workflows/evoom-guard.yml)** — the
   published Marketplace action gating this repo's own PRs.
 * **[A real REJECTED sticky comment](https://github.com/EvoRiseKsa/evoom-guard-demo/pull/1#issuecomment-4945847383)**
